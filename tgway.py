@@ -17,11 +17,11 @@ def getRtbl(attachName):
     rtbName = attachName['Association']['TransitGatewayRouteTableId']
     return(rtbName)
   else:
-    return("NULL")
+    return(None)
 
 # Check whether a return route exists for a particular route
 def chkReturn(attachSrc, routeTbl):
-  if routeTbl != "NULL":
+  if routeTbl:
     retRoutes = ec2cli.search_transit_gateway_routes(TransitGatewayRouteTableId=routeTbl,Filters=[{'Name':'state', 'Values':['active','blackhole']}])
     for z in range(len(retRoutes['Routes'])):
       if 'TransitGatewayAttachments' in retRoutes['Routes'][z]: # check the route references an attachment
@@ -74,7 +74,7 @@ for i in range(len(tgAttach)): # loop round each attachment
   attachId =  tgAttach[i]['TransitGatewayAttachmentId']
   routeTable = getRtbl(tgAttach[i])
   routeMatrix[i+1][i+2] = """<td id="self"></td>""" # own route
-  if routeTable != "NULL":
+  if routeTable:
     routeMatrix[i+1][matrixSize+2] = """<td id=""" + attachType + ">""" + routeTable + """</td>"""
     tgroutes = ec2cli.search_transit_gateway_routes(TransitGatewayRouteTableId=routeTable,Filters=[{'Name':'state', 'Values':['active','blackhole']}])
     # loop round each attachment again, to match against the attachment associated with the specific route.  An attachment can have multiple, seperate routes (CIDRs) pointing to another single TGW attachment as a destination).  I.E:
