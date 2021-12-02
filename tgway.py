@@ -2,6 +2,13 @@
 import boto3
 import json
 import datetime
+from botocore.config import Config
+
+config = Config(
+    retries = dict(
+        max_attempts = 10
+    )
+)
 now = datetime.datetime.now().strftime("%d-%m-%Y %H:%M:%S")
 
 # Get route table associated with an attachment
@@ -10,16 +17,17 @@ def getRtbl(attachName):
     rtbName = attachName['Association']['TransitGatewayRouteTableId']
     return(rtbName)
   else:
-    return("NULL")
+    return(None)
 
 # Check whether a return route exists for a particular route
 def chkReturn(attachSrc, routeTbl):
-  if routeTbl != "NULL":
+  if routeTbl:
     retRoutes = ec2cli.search_transit_gateway_routes(TransitGatewayRouteTableId=routeTbl,Filters=[{'Name':'state', 'Values':['active','blackhole']}])
     for z in range(len(retRoutes['Routes'])):
-      retRouteCheck = retRoutes['Routes'][z]['TransitGatewayAttachments'][0]['TransitGatewayAttachmentId']
-      if retRouteCheck == attachSrc:
-        return(True)
+      if 'TransitGatewayAttachments' in retRoutes['Routes'][z]: # check the route references an attachment
+        retRouteCheck = retRoutes['Routes'][z]['TransitGatewayAttachments'][0]['TransitGatewayAttachmentId']
+        if retRouteCheck == attachSrc:
+          return(True)
   return(False)
 
 def getAttachList(attachments, aliasJson):
@@ -46,7 +54,7 @@ except FileNotFoundError:
   print("This script looks for a file called alias.json to map Transit Gateway attachment IDs to more 'friendly' names of VPCs")
   aliasJson = ""
 
-ec2cli = boto3.client('ec2')
+ec2cli = boto3.client('ec2', config=config)
 tgAttach = ec2cli.describe_transit_gateway_attachments()
 tgAttach = getAttachList(tgAttach['TransitGatewayAttachments'], aliasJson)
 tgAttach = sorted(tgAttach, key = lambda i: (i['ResourceType'], i['FriendlyName'])) # Sort by resource type & friendly name (in that precedence)
@@ -66,7 +74,7 @@ for i in range(len(tgAttach)): # loop round each attachment
   attachId =  tgAttach[i]['TransitGatewayAttachmentId']
   routeTable = getRtbl(tgAttach[i])
   routeMatrix[i+1][i+2] = """<td id="self"></td>""" # own route
-  if routeTable != "NULL":
+  if routeTable:
     routeMatrix[i+1][matrixSize+2] = """<td id=""" + attachType + ">""" + routeTable + """</td>"""
     tgroutes = ec2cli.search_transit_gateway_routes(TransitGatewayRouteTableId=routeTable,Filters=[{'Name':'state', 'Values':['active','blackhole']}])
     # loop round each attachment again, to match against the attachment associated with the specific route.  An attachment can have multiple, seperate routes (CIDRs) pointing to another single TGW attachment as a destination).  I.E:
@@ -79,22 +87,26 @@ for i in range(len(tgAttach)): # loop round each attachment
       routeStateArray = []
       for x in range(len(tgroutes['Routes'])): # loop round each route within the route table
         routeState = tgroutes['Routes'][x]['State']
-        routeAttach = tgroutes['Routes'][x]['TransitGatewayAttachments'][0]['TransitGatewayAttachmentId'] # need to watch this - not sure why it's an array as each route can only be directed at a single attachment
-        routeCIDR = tgroutes['Routes'][x]['DestinationCidrBlock']
-        testAttach = tgAttach[y]['TransitGatewayAttachmentId']
-        if testAttach == routeAttach: # if there's a match, test to see if the return route is in place...
-          returnRtbl = getRtbl(tgAttach[y])
-          retRouteFound = chkReturn(attachId, returnRtbl)
-          if retRouteFound:
-            if routeState == "active":
-              routeStateArray.append('active')
-              cidrArray.append(routeCIDR + ' : &#9989;')
+        if 'TransitGatewayAttachments' in tgroutes['Routes'][x]: # check the route references an attachment
+          routeAttach = tgroutes['Routes'][x]['TransitGatewayAttachments'][0]['TransitGatewayAttachmentId'] # need to watch this - not sure why it's an array as each route can only be directed at a single attachment
+          routeCIDR = tgroutes['Routes'][x]['DestinationCidrBlock']
+          testAttach = tgAttach[y]['TransitGatewayAttachmentId']
+          if testAttach == routeAttach: # if there's a match, test to see if the return route is in place...
+            returnRtbl = getRtbl(tgAttach[y])
+            retRouteFound = chkReturn(attachId, returnRtbl)
+            if retRouteFound:
+              if routeState == "active":
+                routeStateArray.append('active')
+                cidrArray.append(routeCIDR + ' : &#9989;')
+              else:
+                routeStateArray.append('blackhole')
+                cidrArray.append(routeCIDR + ' : &#128310;')
             else:
-              routeStateArray.append('blackhole')
-              cidrArray.append(routeCIDR + ' : &#128310;')
-          else:
-            routeStateArray.append('oneway')
-            cidrArray.append(routeCIDR + ' : &#10060;')
+              routeStateArray.append('oneway')
+              cidrArray.append(routeCIDR + ' : &#10060;')
+        else:
+          routeStateArray.append('blackhole')
+          cidrArray.append(routeCIDR + ' : &#128310;')
       separator = '<br />'
       # each if condition supersedes the previous condition.  The 'td id' is specified by whether any routes are found.
       #   If route is active and has return route : td id = route (green background)
